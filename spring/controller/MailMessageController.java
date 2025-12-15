@@ -1,15 +1,27 @@
 package com.db.spring.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.db.spring.dto.MailSendDTO;
+import com.db.spring.entity.MailAccount;
 import com.db.spring.entity.MailMessage;
+import com.db.spring.entity.MailRecipient;
+import com.db.spring.service.MailAccountService;
 import com.db.spring.service.MailMessageService;
 import com.db.spring.util.ResultUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import javax.mail.*;
+import javax.mail.internet.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
+import java.util.Properties;
+
 /**
  * <p>
  *  前端控制器
@@ -24,6 +36,9 @@ public class MailMessageController {
 
     @Autowired
     private MailMessageService mailMessageService;
+
+    @Autowired
+    private MailAccountService mailAccountService;
 
 
     @GetMapping
@@ -94,4 +109,107 @@ public class MailMessageController {
         }
     }
 
+    @PostMapping("/send")
+    public ResultUtil sendMail(MailSendDTO mailSendDTO) throws IOException {
+
+        System.out.println(mailSendDTO);
+        QueryWrapper<MailAccount> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("email",mailSendDTO.getSenderEmail());
+        MailAccount  mailAccount = mailAccountService.getBaseMapper().selectList(queryWrapper).get(0);
+
+
+        // 1. 参数校验
+        if (mailSendDTO.getSenderEmail() == null || mailSendDTO.getSenderEmail().isEmpty()) {
+            return ResultUtil.fail("901", "发件人邮箱不能为空");
+        }
+        if (mailSendDTO.getReceiverEmail() == null || mailSendDTO.getReceiverEmail().isEmpty()) {
+            return ResultUtil.fail("903", "收件人邮箱不能为空");
+        }
+        if (mailSendDTO.getSubject() == null || mailSendDTO.getSubject().isEmpty()) {
+            return ResultUtil.fail("904", "邮件主题不能为空");
+        }
+        if (mailSendDTO.getContent() == null || mailSendDTO.getContent().isEmpty()) {
+            return ResultUtil.fail("905", "邮件正文不能为空");
+        }
+
+        try {
+            // 2. 动态获取发件人邮箱的SMTP配置（适配QQ/163/企业邮箱）
+            Properties props = getSmtpProperties(mailSendDTO.getSenderEmail(),mailAccount);
+
+            // 3. 创建SMTP会话
+            Session session = Session.getInstance(props, new Authenticator() {
+                @Override
+                protected PasswordAuthentication getPasswordAuthentication() {
+                    return new PasswordAuthentication(mailSendDTO.getSenderEmail(), mailAccount.getAuthCode());
+                }
+            });
+            session.setDebug(false); // 关闭调试日志
+
+            // 4. 构建邮件消息
+            MimeMessage message = new MimeMessage(session);
+            // 发件人
+            message.setFrom(new InternetAddress(mailSendDTO.getSenderEmail()));
+            // 收件人（多个用逗号分隔，解析为数组）
+            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(mailSendDTO.getReceiverEmail()));
+            // 邮件主题
+            message.setSubject(mailSendDTO.getSubject());
+
+            // 5. 构建邮件内容（正文+附件）
+            Multipart multipart = new MimeMultipart();
+
+            // 5.1 邮件正文部分（支持HTML）
+            MimeBodyPart contentPart = new MimeBodyPart();
+            contentPart.setContent(mailSendDTO.getContent(), "text/html;charset=UTF-8");
+            multipart.addBodyPart(contentPart);
+
+            // 5.2 处理附件
+            List<MultipartFile> attachments = mailSendDTO.getAttachments();
+            if (attachments != null && !attachments.isEmpty()) {
+                for (MultipartFile file : attachments) {
+                    if (file.isEmpty()) {
+                        continue;
+                    }
+
+                    String filename = file.getOriginalFilename();
+                    File attachFile = new File("C:\\Attachments\\" + filename);
+
+                    try (FileOutputStream fos = new FileOutputStream(attachFile)) {
+                        fos.write(file.getBytes());
+                    }
+
+                    // 将附件添加到邮件中
+                    MimeBodyPart attachPart = new MimeBodyPart();
+                    attachPart.attachFile(attachFile);
+                    attachPart.setFileName(filename);
+                    multipart.addBodyPart(attachPart);
+                }
+            }
+
+            // 6. 设置邮件内容并发送
+            message.setContent(multipart);
+            message.setSentDate(new java.util.Date());
+            Transport.send(message);
+
+            // 7. 返回成功结果（若需保存邮件信息，可在此处直接调用Mapper插入，示例省略）
+            return ResultUtil.success("邮件发送成功");
+
+        } catch (MessagingException e) {
+            e.printStackTrace();
+            return ResultUtil.fail("906", "邮件发送失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 根据发件人邮箱动态获取SMTP配置
+     */
+    private Properties getSmtpProperties(String senderEmail,MailAccount mailAccount) {
+        Properties props = new Properties();
+        props.setProperty("mail.transport.protocol", "smtp");
+        props.setProperty("mail.smtp.auth", "true");
+        props.setProperty("mail.smtp.ssl.enable", "true");
+        props.setProperty("mail.smtp.host",mailAccount.getProtocolSmtp());
+        props.setProperty("mail.smtp.port",String.valueOf(mailAccount.getProtocolSmtpPort()));
+        props.setProperty("mail.smtp.ssl.trust", props.getProperty("mail.smtp.host"));
+        return props;
+    }
 }

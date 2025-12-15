@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.db.spring.entity.MailAccount;
 import com.db.spring.entity.MailMessageFolder;
 import com.db.spring.service.MailAccountService;
+import com.db.spring.util.ResultUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -34,5 +35,12 @@ public class MailAccountController {
     @PostMapping("/getIdByEmail")
     public Long getIdByEmail(@RequestParam String email){
         return mailAccountService.getBaseMapper().selectOne(new QueryWrapper<MailAccount>().eq("email",email)).getAccountId();
+    }
+    @PostMapping("/getAcById")
+    public Object getAcById(@RequestParam Long id){
+        QueryWrapper<MailAccount> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("user_id",id);
+        List<MailAccount> list = mailAccountService.getBaseMapper().selectList(queryWrapper);
+        return ResultUtil.success(list);
     }
 }
